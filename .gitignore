@@ -1,0 +1,25 @@
+# Generated Helm manifests
+rendered-*.yaml
+
+# Local backups
+*.bak
+*.backup
+*.pre-webhook.yaml
+
+# Kubernetes credentials
+kubeconfig
+kubeconfig.*
+*.kubeconfig
+
+# Environment files
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor files
+.vscode/
+.idea/
+*.swp

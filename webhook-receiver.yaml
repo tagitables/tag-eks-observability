@@ -1,0 +1,122 @@
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coaching20-webhook-code
+  namespace: tag-coaching20-prom
+data:
+  server.py: |
+    import json
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/health":
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"OK")
+            else:
+                self.send_error(404)
+
+        def do_POST(self):
+            if self.path != "/alert":
+                self.send_error(404)
+                return
+
+            length = int(self.headers.get("Content-Length", 0))
+
+            if length > 1048576:
+                self.send_error(413)
+                return
+
+            payload = self.rfile.read(length)
+
+            try:
+                data = json.loads(payload)
+            except (ValueError, UnicodeDecodeError):
+                self.send_error(400)
+                return
+
+            print("=== ALERTMANAGER WEBHOOK RECEIVED ===", flush=True)
+            print(json.dumps(data, indent=2), flush=True)
+
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"received")
+
+    HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coaching20-webhook
+  namespace: tag-coaching20-prom
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: coaching20-webhook
+  template:
+    metadata:
+      labels:
+        app: coaching20-webhook
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: webhook
+          image: python:3.12-alpine
+          command: ["python", "-u", "/app/server.py"]
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 96Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            runAsUser: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: code
+              mountPath: /app
+              readOnly: true
+      volumes:
+        - name: code
+          configMap:
+            name: coaching20-webhook-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coaching20-webhook
+  namespace: tag-coaching20-prom
+spec:
+  type: ClusterIP
+  selector:
+    app: coaching20-webhook
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP

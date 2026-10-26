@@ -1,0 +1,176 @@
+
+# ============================================================
+# COACHING 20 — PROMETHEUS + ALERTMANAGER
+# Chart: prometheus-community/prometheus
+# Version: 27.5.1
+# Namespace: tag-coaching20-prom
+#
+# Shared EKS cluster — namespace-isolated deployment
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1. RBAC — NO CLUSTER-WIDE PERMISSIONS
+# ------------------------------------------------------------
+
+rbac:
+  create: false
+
+serviceAccounts:
+  server:
+    create: true
+
+
+# ------------------------------------------------------------
+# 2. DISABLE SHARED-NODE EXPORTERS AND UNUSED COMPONENTS
+# ------------------------------------------------------------
+
+prometheus-node-exporter:
+  enabled: false
+
+kube-state-metrics:
+  enabled: false
+
+prometheus-pushgateway:
+  enabled: false
+
+
+# ------------------------------------------------------------
+# 3. PROMETHEUS SERVER
+# ------------------------------------------------------------
+
+server:
+  enabled: true
+
+  # Prometheus evaluation and scraping intervals
+  global:
+    scrape_interval: 15s
+    evaluation_interval: 15s
+
+  # Connect Prometheus to our Alertmanager
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - tag-coaching20-prom-alertmanager.tag-coaching20-prom.svc.cluster.local:9093
+
+  # No persistent storage
+  persistentVolume:
+    enabled: false
+
+  # No public ingress
+  ingress:
+    enabled: false
+
+  # Cluster-internal access only
+  service:
+    type: ClusterIP
+
+  # Limit shared-cluster resource consumption
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+
+# ------------------------------------------------------------
+# 4. ALERTMANAGER
+# ------------------------------------------------------------
+
+alertmanager:
+  enabled: true
+
+  persistence:
+    enabled: false
+
+  ingress:
+    enabled: false
+
+  service:
+    type: ClusterIP
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+  config:
+    global: {}
+
+    route:
+      receiver: coaching20-webhook
+      group_wait: 10s
+      group_interval: 30s
+      repeat_interval: 1m
+
+    receivers:
+      - name: coaching20-webhook
+        webhook_configs:
+          - url: http://coaching20-webhook.tag-coaching20-prom.svc.cluster.local:8080/alert
+            send_resolved: true
+
+
+# ------------------------------------------------------------
+# 5. PROMETHEUS CONFIGURATION AND SCRAPE TARGETS
+# ------------------------------------------------------------
+
+serverFiles:
+
+  prometheus.yml:
+
+    # Only static scrape targets.
+    # No Kubernetes service discovery.
+    # No cluster-wide API permissions required.
+
+    scrape_configs:
+
+      # Prometheus self-monitoring
+      - job_name: prometheus
+        scrape_interval: 15s
+        static_configs:
+          - targets:
+              - localhost:9090
+
+      # Existing shared NGINX Ingress metrics endpoint
+      # Read-only scraping; no changes to ingress-nginx.
+      - job_name: nginx-ingress
+        scrape_interval: 15s
+        metrics_path: /metrics
+        static_configs:
+          - targets:
+              - ingress-nginx-controller-metrics.ingress-nginx.svc.cluster.local:10254
+
+
+  # ----------------------------------------------------------
+  # 6. ALERT RULES
+  # ----------------------------------------------------------
+
+  alerting_rules.yml:
+
+    groups:
+
+      - name: coaching20-test-alerts
+
+        rules:
+
+          - alert: Coaching20TestAlert
+
+            # Healthy Prometheus triggers a controlled test alert.
+            # This does not intentionally break any service.
+            expr: up{job="prometheus"} == 1
+
+            # Condition must remain true for 30 seconds.
+            for: 30s
+
+            labels:
+              severity: info
+              namespace: tag-coaching20-prom
+
+            annotations:
+              summary: "Coaching 20 test alert"
+              description: "Controlled alert demonstrating Prometheus to Alertmanager routing."
